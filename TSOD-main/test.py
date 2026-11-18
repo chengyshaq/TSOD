@@ -99,7 +99,7 @@ def get_measures(_pos, _neg, recall_level=0.95):
     return auroc, aupr, fpr95
 
 
-def plot_ood_distribution(tail_scores, ood_scores, save_dir=None, score_name="得分函数值", dout_name=""):
+def plot_ood_distribution(tail_scores, ood_scores, save_dir=None, score_name="Energy Score", dout_name=""):
     # 确保输入是NumPy数组
     tail_scores = np.array(tail_scores)
     ood_scores = np.array(ood_scores)
@@ -121,7 +121,7 @@ def plot_ood_distribution(tail_scores, ood_scores, save_dir=None, score_name="�
         tail_scores,
         bins=bins,
         alpha=0.7,
-        label='尾类分布内样本',
+        label='ID Tail Samples',
         color='blue',
         density=False
     )
@@ -130,7 +130,7 @@ def plot_ood_distribution(tail_scores, ood_scores, save_dir=None, score_name="�
         ood_scores,
         bins=bins,
         alpha=0.7,
-        label='OOD样本',
+        label='OOD Samples',
         color='orange',
         density=False
     )
@@ -140,13 +140,18 @@ def plot_ood_distribution(tail_scores, ood_scores, save_dir=None, score_name="�
 
     # 设置坐标轴标签
     plt.xlabel(score_name, fontsize=12)
-    plt.ylabel('样本数量', fontsize=12)
+    plt.ylabel('Sample Size', fontsize=12)
     plt.xlim(-4, 3)
     max_count = max(np.max(n_tail), np.max(n_ood))
     plt.ylim(bottom=0, top=max_count * 1.1)
 
     # 添加图例和网格
     plt.legend()
+    plt.grid(alpha=0.3)
+    plt.tight_layout()
+
+    # 固定图例在右上角！
+    plt.legend(loc="upper right")
     plt.grid(alpha=0.3)
     plt.tight_layout()
 
@@ -218,7 +223,7 @@ def val_cifar(ood_loader, dout_name, log_file=None):
     auroc, aupr, fpr95 = get_measures(real_ood_scores, real_in_scores)
 
     # 绘制分布图
-    plot_ood_distribution(tail_scores, real_ood_scores, save_dir=save_dir, score_name="Energy得分", dout_name=dout_name)
+    plot_ood_distribution(tail_scores, real_ood_scores, save_dir=save_dir, score_name="Energy Score", dout_name=dout_name)
 
     # 打印该数据集的结果（只包含需要的7个指标）
     result_str = f"\n=== {dout_name} ===\n"
@@ -308,7 +313,7 @@ if __name__ == '__main__':
     parser.add_argument('--test_batch_size', '--tb', type=int, default=256)
     parser.add_argument('--metric', default='energy', help='OOD detection metric')
     parser.add_argument('--ckpt_path',
-                        default=r'D:\PyCharmWorkSpace\TSOD-main\logs\cifar100-0.01-OOD300000\ResNet18\e901-b128-adam-lr0.001-wd0.0005-cos')
+                        default=r'D:\PyCharmWorkSpace\DNA-main\logs\cifar100-0.01-OOD300000\ResNet18\e514-b128-adam-lr0.001-wd0.0005-cos')
     parser.add_argument('--ckpt', default='latest', choices=['latest', 'epoch'])
     parser.add_argument('--feature_dim', default=512, type=int)
     # 新增：保存结果的文件路径参数
