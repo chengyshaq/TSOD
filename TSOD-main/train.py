@@ -1,6 +1,5 @@
 import argparse
 import pickle
-
 import torch
 import torch.nn.functional as F
 import torchvision.models
@@ -17,20 +16,14 @@ from models.resnet_imagenet import ResNet50
 from utils.utils import *
 import numpy as np
 import matplotlib.pyplot as plt
-
 plt.style.use('tableau-colorblind10')
 from PIL import ImageFile
-
 ImageFile.LOAD_TRUNCATED_IMAGES = True
-
 # 作用：从 PyTorch 的 torch.nn.utils 模块导入 spectral_norm 函数。
 # spectral_norm 用于对神经网络中的某些层（例如卷积层、全连接层等）进行谱归一化（Spectral Normalization），
 # 这是一种常用于生成对抗网络（GANs）等模型中，目的是控制层权重矩阵的谱范数，从而提高训练的稳定性。
 from torch.nn.utils import spectral_norm
-
 from collections import Counter
-
-
 def get_args_parser():
     parser = argparse.ArgumentParser()
     parser.add_argument('--gpu', default='0')
@@ -82,14 +75,10 @@ def get_args_parser():
                         help='梯度裁剪范数阈值 (默认: 0.0 表示不裁剪)')
     args = parser.parse_args()
     return args
-
-
 """
     总结：
     该函数的目的是生成并返回一个保存训练结果的路径，路径根据用户输入的训练超参数、数据集、优化器等信息动态构建。
 """
-
-
 def create_save_path():
     # mkdirs:
     decay_str = args.decay
@@ -109,32 +98,22 @@ def create_save_path():
     create_dir(save_dir)
     print('Saving to %s' % save_dir)
     return save_dir
-
-
 """
     总结：
     该函数的目的是初始化 PyTorch 分布式训练的环境。
     它通过 init_process_group() 设置进程间的通信，并为每个进程分配一个 rank 和计算总进程数 world_size。
     这样，分布式训练中的每个进程都能通过这些配置正确地与其他进程进行通信。
 """
-
-
 def setup(rank, ngpus_per_node, args):
     # initialize the process group
     world_size = ngpus_per_node * args.num_nodes
     dist.init_process_group(args.ddp_backend, init_method=args.dist_url, rank=rank, world_size=world_size)
-
-
 """
     总结：
     cleanup()函数的作用是确保在分布式训练完成后，销毁进程组并释放所有与分布式训练相关的资源，避免内存泄漏或其他潜在问题。
 """
-
-
 def cleanup():
     dist.destroy_process_group()
-
-
 # 递归函数，目的是对一个神经网络模型中的所有卷积层（Conv2d 层）应用谱归一化（Spectral Normalization）。
 # 该函数的作用是递归遍历一个神经网络模型中的所有层，并对每个 Conv2d 卷积层应用谱归一化（spectral_norm）。
 # 如果某层不是卷积层，它会继续检查该层的子层（即递归子模块），直到对所有的卷积层都应用谱归一化处理。最终，返回修改后的模型。
@@ -158,6 +137,22 @@ def apply_spectral_norm_to_conv(module):
         module.add_module(child_name, apply_spectral_norm_to_conv(child_module))
     # 作用：返回修改后的 module。通过递归地应用谱归一化处理，函数返回的是原始模块结构，但其中所有的 Conv2d 层都已经应用了谱归一化。
     return module
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 def train(gpu_id, ngpus_per_node, args):
@@ -1184,11 +1179,8 @@ def train(gpu_id, ngpus_per_node, args):
         loss = -(smoothed_label * F.log_softmax(logits, dim=1)).sum(dim=1).mean()
         return loss
 
-
-
-
-    MAX_OOD_WEIGHT = 0.15  # 限制OOD损失的最大权重
-    MIN_DYNAMIC_EPOCHS = 5  # 最小动态调整期
+    MAX_OOD_WEIGHT = 0.15
+    MIN_DYNAMIC_EPOCHS = 5
 
     # 训练主循环
     for epoch in range(args.epochs):
@@ -1197,7 +1189,6 @@ def train(gpu_id, ngpus_per_node, args):
 
         model.train()
 
-        # 初始化损失统计变量
         training_loss_sum = 0.0
         training_loss_LA_sum = 0.0
         training_loss_triplet_sum = 0.0
@@ -1206,42 +1197,23 @@ def train(gpu_id, ngpus_per_node, args):
 
         current_lr = scheduler.get_last_lr()[0]
 
-        # ------------------- 优化类别权重动态调整策略 -------------------
-        if epoch < args.transition_epoch * 0.3:
-            class_weights = compute_cb_class_weights(
-                train_loader.dataset, args.num_classes, beta=0.99, device=device,
-                relation_scale=0.2, max_weight_scale=2.0,
-                transition_epoch=args.transition_epoch, current_epoch=epoch
-            )
-        elif epoch < args.transition_epoch:
-            class_weights = compute_cb_class_weights(
-                train_loader.dataset, args.num_classes, beta=0.995, device=device,
-                relation_scale=0.3, max_weight_scale=2.5,
-                transition_epoch=args.transition_epoch, current_epoch=epoch
-            )
-        else:
-            class_weights = compute_cb_class_weights(
-                train_loader.dataset, args.num_classes, beta=0.998, device=device,
-                relation_scale=0.2, max_weight_scale=2.0,
-                transition_epoch=args.transition_epoch, current_epoch=epoch
-            )
-
-        # ------------------- 优化损失函数权重动态调整 -------------------
-        # 延迟三元组损失启动
-        max_triplet_epochs = max(MIN_DYNAMIC_EPOCHS, int(args.epochs * 0.3))
-        if epoch < max_triplet_epochs:
+        # ------------------- 损失权重动态调度（对齐旧成功版本思路） -------------------
+        # 三元组延后启动，改用linear慢速上升，降低峰值
+        triplet_start_epoch = int(args.epochs * 0.4)
+        max_triplet_epochs = max(MIN_DYNAMIC_EPOCHS, int(args.epochs * 0.25))
+        if epoch < triplet_start_epoch:
+            triplet_weight = 0.0
+        elif epoch < triplet_start_epoch + max_triplet_epochs:
             triplet_weight = compute_dynamic_weight(
-                epoch, max_triplet_epochs,
-                initial_weight=0.0, final_weight=0.6,
-                curve='exponential'
+                epoch - triplet_start_epoch, max_triplet_epochs,
+                initial_weight=0.0, final_weight=0.4,
+                curve='linear'  # 关键：从 exponential → linear，避免权重突然冲上去
             )
-        elif epoch < args.epochs * 0.7:
-            triplet_weight = 0.6
         else:
-            triplet_weight = 0.6 - (epoch - args.epochs * 0.7) / (args.epochs * 0.3) * 0.2
+            triplet_weight = 0.4
 
-        # 进一步延迟OOD损失并限制最大权重
-        ood_start_epoch = int(args.epochs * 0.5)  # 延迟启动OOD损失
+        # OOD保持原设置不变
+        ood_start_epoch = int(args.epochs * 0.5)
         max_ood_epochs = max(MIN_DYNAMIC_EPOCHS, int(args.epochs * 0.3))
         if epoch < ood_start_epoch:
             ood_weight = 0.0
@@ -1254,22 +1226,6 @@ def train(gpu_id, ngpus_per_node, args):
         else:
             ood_weight = MAX_OOD_WEIGHT
 
-        # ------------------- 优化学习率策略 -------------------
-        if epoch == 0:
-            for param_group in optimizer.param_groups:
-                param_group['lr'] = args.lr * 0.05
-        elif epoch == 1:
-            for param_group in optimizer.param_groups:
-                param_group['lr'] = args.lr * 0.3
-        elif epoch == 2:
-            for param_group in optimizer.param_groups:
-                param_group['lr'] = args.lr
-        elif epoch > 0 and epoch % 30 == 0:
-            for param_group in optimizer.param_groups:
-                param_group['lr'] = args.lr * 0.7
-                print(f"Learning rate restarted to: {param_group['lr']}")
-
-        # ------------------- 批次训练循环 -------------------
         for batch_idx, ((in_data, labels), (ood_data, _)) in enumerate(zip(train_loader, ood_loader)):
             in_data, labels = in_data.to(device), labels.to(device)
             ood_data = ood_data.to(device)
@@ -1277,59 +1233,37 @@ def train(gpu_id, ngpus_per_node, args):
             N_in = len(labels)
             all_data = torch.cat([in_data, ood_data], dim=0)
 
-            # 前向传播
             all_logits, all_reps = model(all_data)
             in_logits = all_logits[:N_in]
             in_reps = all_reps[:N_in]
             ood_logits = all_logits[N_in:]
 
-            # 计算LA_loss（分类损失）
             adjusted_in_logits = in_logits + args.tau * prior.log()[None, :]
-            LA_loss = F.cross_entropy(adjusted_in_logits, labels, weight=class_weights)
+            LA_loss = F.cross_entropy(adjusted_in_logits, labels)
 
-            # 改进的三元组损失难例挖掘
+            # ========== 重点改动：margin固定，不再随epoch放大 ==========
             if len(in_reps) > 1 and len(torch.unique(labels)) > 1:
-                margin = args.margin * min(1.0, (epoch + 1) / 5)
+                margin = args.margin
                 triplet_loss = batch_hard_triplet_loss(
                     in_reps, labels, logits=in_logits, margin=margin
                 )
             else:
                 triplet_loss = torch.tensor(0.0, device=device)
 
-            # 计算改进的OOD检测损失
             ood_loss = ood_detection_loss_improved(ood_logits, prior, temperature=args.temperature)
 
-            # 总损失
             loss = LA_loss + triplet_weight * triplet_loss + ood_weight * ood_loss
 
-            # 梯度累积与优化（增强梯度裁剪）
-            if args.gradient_accumulation_steps > 1:
-                scaled_loss = loss / args.gradient_accumulation_steps
-                scaled_loss.backward()
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
 
-                if (batch_idx + 1) % args.gradient_accumulation_steps == 0:
-                    # 动态梯度裁剪：OOD权重高时更严格
-                    clip_value = 0.5 if ood_weight > 0.1 else 1.0
-                    if clip_value > 0:
-                        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=clip_value)
-                    optimizer.step()
-                    optimizer.zero_grad()
-            else:
-                optimizer.zero_grad()
-                loss.backward()
-                clip_value = 0.5 if ood_weight > 0.1 else 1.0
-                if clip_value > 0:
-                    torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=clip_value)
-                optimizer.step()
-
-            # 累积损失值
             training_loss_sum += loss.item()
             training_loss_LA_sum += LA_loss.item()
             training_loss_triplet_sum += triplet_loss.item()
             training_loss_ood_sum += ood_loss.item()
             batch_count += 1
 
-            # 打印训练日志
             if batch_idx % 100 == 0:
                 train_str = 'epoch %d batch %d (train): ' \
                             'loss %.4f (LA: %.4f, Triplet: %.4f, OOD: %.4f) | ' \
@@ -1346,10 +1280,8 @@ def train(gpu_id, ngpus_per_node, args):
                     fp.write(train_str + '\n')
                     fp.flush()
 
-        # 更新学习率
         scheduler.step()
 
-        # 计算并打印整个epoch的平均损失
         epoch_avg_loss = training_loss_sum / batch_count
         epoch_avg_LA_loss = training_loss_LA_sum / batch_count
         epoch_avg_triplet_loss = training_loss_triplet_sum / batch_count
@@ -1359,13 +1291,6 @@ def train(gpu_id, ngpus_per_node, args):
                     f'Triplet Loss = {epoch_avg_triplet_loss:.4f}, ' \
                     f'OOD Loss = {epoch_avg_ood_loss:.4f}'
         print(epoch_str)
-
-
-
-
-
-
-
 
 
 
@@ -1437,21 +1362,6 @@ def train(gpu_id, ngpus_per_node, args):
             fp_val.write(val_str + '\n')
             # 刷新文件缓冲区，确保评估结果立即写入磁盘。
             fp_val.flush()
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
         """
         这段代码的目的是在训练过程中保存模型的状态以及相关信息。根据args.ddp的值（即是否启用分布式数据并行，DDP），保存的内容略有不同。
         总结：
@@ -1540,6 +1450,23 @@ def train(gpu_id, ngpus_per_node, args):
         # 释放 DDP 使用的进程通信资源（如 NCCL 或 Gloo 后端）。清理并关闭通信的后台进程。
         # 可能会做一些与分布式训练相关的其他清理工作。
         cleanup()
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 """
