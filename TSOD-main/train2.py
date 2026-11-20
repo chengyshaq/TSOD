@@ -534,7 +534,7 @@
         bandwidth = torch.clamp(bandwidth, min=0.2, max=num_classes * 0.3)
 
         # 5. 核函数优化
-        kernel_list = ['rbf', 'linear']
+        kernel_list = ['rbf', 'linear', 'poly']
         kernel_val_xx, kernel_val_yy, kernel_val_xy = [], [], []
 
         for kernel_type in kernel_list:
@@ -578,6 +578,15 @@
                 k_yy = torch.mm(y_whitened, y_whitened.t()) * y_weights.unsqueeze(1) * y_weights.unsqueeze(0)
                 k_xy = torch.mm(x_whitened, y_whitened.t()) * x_weights.unsqueeze(1) * y_weights.unsqueeze(0)
 
+            elif kernel_type == 'poly':
+                degree = 2
+                k_xx = (torch.mm(x_whitened, x_whitened.t()) + 1) ** degree * x_weights.unsqueeze(
+                    1) * x_weights.unsqueeze(0)
+                k_yy = (torch.mm(y_whitened, y_whitened.t()) + 1) ** degree * y_weights.unsqueeze(
+                    1) * y_weights.unsqueeze(0)
+                k_xy = (torch.mm(x_whitened, y_whitened.t()) + 1) ** degree * x_weights.unsqueeze(
+                    1) * y_weights.unsqueeze(0)
+            
             kernel_val_xx.append(k_xx)
             kernel_val_yy.append(k_yy)
             kernel_val_xy.append(k_xy)
